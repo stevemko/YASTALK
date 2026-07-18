@@ -25,7 +25,8 @@ SECRET_KEY = config('DJANGO_SECRET_KEY', default='django-insecure-CHANGE-ME-IN-P
 
 DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
+# UPDATED: Added Render domain to the default list
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='yastalk.onrender.com,localhost,127.0.0.1', cast=Csv())
 
 # Application definition
 
@@ -160,4 +161,3 @@ CSRF_TRUSTED_ORIGINS = config(
     default='http://localhost:5173,http://127.0.0.1:5173',
     cast=Csv(),
 )
-
