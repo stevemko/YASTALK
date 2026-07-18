@@ -152,12 +152,12 @@ REST_FRAMEWORK = {
 # --- CORS / CSRF (React dev server + production frontend) ---
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
-    default='http://localhost:5173,http://127.0.0.1:5173',
+    default='https://yas-talk-50hg0pris-greenlightled.vercel.app,https://yas-talk.vercel.app,http://localhost:5173,http://127.0.0.1:5173',
     cast=Csv(),
 )
 
 CSRF_TRUSTED_ORIGINS = config(
     'CSRF_TRUSTED_ORIGINS',
-    default='http://localhost:5173,http://127.0.0.1:5173',
+    default='https://yas-talk-50hg0pris-greenlightled.vercel.app,https://yas-talk.vercel.app,http://localhost:5173,http://127.0.0.1:5173',
     cast=Csv(),
 )
