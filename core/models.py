@@ -1,3 +1,6 @@
+import uuid
+
+from django.core.validators import RegexValidator
 from django.db import models
 
 
@@ -90,3 +93,43 @@ class NewsletterSubscriber(models.Model):
 
     def __str__(self):
         return self.email
+
+
+class Payment(models.Model):
+    """A payment made through the website (M-Pesa STK Push via Daraja)."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        SUCCESS = 'success', 'Success'
+        FAILED = 'failed', 'Failed'
+
+    phone_validator = RegexValidator(
+        regex=r'^254[17]\d{8}$',
+        message="Phone must be in the format 2547XXXXXXXX or 2541XXXXXXXX",
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    email = models.EmailField()
+    phone = models.CharField(max_length=12, validators=[phone_validator])
+    plan = models.CharField(max_length=30)
+    amount = models.PositiveIntegerField(help_text="Amount in KSh, always set by the server")
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    checkout_request_id = models.CharField(max_length=100, blank=True, db_index=True)
+    mpesa_receipt = models.CharField(max_length=30, blank=True)
+    result_desc = models.CharField(
+        max_length=200, blank=True,
+        help_text="Safaricom's message, e.g. why a payment failed or was cancelled",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['phone', 'plan', 'status']),   # duplicate-payment check
+        ]
+
+    def __str__(self):
+        return f"{self.plan} - KSh {self.amount} - {self.phone} [{self.status}]"
