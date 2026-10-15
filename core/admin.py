@@ -1,17 +1,24 @@
 import csv
 
 from django.contrib import admin
+from django.contrib.auth import get_user_model
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.http import HttpResponse
 
 from .models import (
+    ContactMessage,
+    Event,
     Language,
+    LoginActivity,
+    NewsletterSubscriber,
+    Payment,
+    Profile,
     Service,
     TeamMember,
     Testimonial,
-    ContactMessage,
-    NewsletterSubscriber,
-    Payment,
 )
+
+User = get_user_model()
 
 
 @admin.register(Language)
@@ -87,3 +94,60 @@ class PaymentAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False        # nobody should create a "paid" record by hand
+
+
+@admin.register(Event)
+class EventAdmin(admin.ModelAdmin):
+    list_display = ['title', 'kind', 'starts_at', 'location', 'is_published']
+    list_filter = ['kind', 'is_published', 'starts_at']
+    list_editable = ['is_published']
+    search_fields = ['title', 'summary', 'location']
+    prepopulated_fields = {'slug': ('title',)}      # slug fills in as you type the title
+    date_hierarchy = 'starts_at'
+
+
+class ProfileInline(admin.StackedInline):
+    model = Profile
+    can_delete = False
+
+
+admin.site.unregister(User)
+
+
+@admin.register(User)
+class UserAdmin(BaseUserAdmin):
+    inlines = [ProfileInline]
+    list_display = [
+        'email', 'first_name', 'last_name',
+        'is_active', 'is_staff', 'date_joined', 'last_login',
+    ]
+    list_filter = ['is_active', 'is_staff', 'date_joined']
+    search_fields = ['email', 'first_name', 'last_name', 'profile__phone']
+    ordering = ['-date_joined']
+    actions = ['deactivate_users', 'activate_users']
+
+    @admin.action(description='Deactivate selected users (they can no longer log in)')
+    def deactivate_users(self, request, queryset):
+        queryset.exclude(is_superuser=True).update(is_active=False)
+
+    @admin.action(description='Re-activate selected users')
+    def activate_users(self, request, queryset):
+        queryset.update(is_active=True)
+
+
+@admin.register(LoginActivity)
+class LoginActivityAdmin(admin.ModelAdmin):
+    list_display = ['created_at', 'email_attempted', 'success', 'ip_address', 'user']
+    list_filter = ['success', 'created_at']
+    search_fields = ['email_attempted', 'ip_address']
+    date_hierarchy = 'created_at'
+    readonly_fields = [
+        'user', 'email_attempted', 'success',
+        'ip_address', 'user_agent', 'created_at',
+    ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False        # an audit log should not be editable

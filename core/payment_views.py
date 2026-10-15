@@ -1,9 +1,11 @@
 import hmac
 import logging
 import re
+import threading
 from datetime import timedelta
 
 from decouple import config
+from django.core.mail import send_mail
 from django.utils import timezone
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -16,7 +18,8 @@ from .mpesa import stk_push
 logger = logging.getLogger(__name__)
 
 # IMPORTANT: replace with YOUR real plan names and prices (KSh).
-# These are placeholders. The server decides the price, never the browser.
+# These are placeholders. The server decides the price, never the browser,
+# and the plan keys must match the ones your frontend sends.
 PLANS = {
     "mini": 499,
     "basic": 699,
@@ -26,7 +29,8 @@ PLANS = {
 
 
 def normalize_phone(raw):
-    p = re.sub(r"\D", "", raw or "")          # keep digits only (drops + and spaces)
+    """Turn 0712345678 / +254712345678 / 712345678 into 254712345678, or None if invalid."""
+    p = re.sub(r"\D", "", raw or "")
     if p.startswith("0"):
         p = "254" + p[1:]
     elif p[:1] in ("7", "1"):
@@ -34,7 +38,28 @@ def normalize_phone(raw):
     return p if re.fullmatch(r"254[17]\d{8}", p) else None
 
 
+def _send_receipt_email(pay):
+    """Send the confirmation email in the background so Safaricom's callback is answered fast."""
+    def _send():
+        try:
+            send_mail(
+                "YasTalk payment received",
+                f"Thank you! We received your payment of KSh {pay.amount} "
+                f"for the {pay.plan} plan.\n\nM-Pesa receipt: {pay.mpesa_receipt}",
+                None,
+                [pay.email],
+                fail_silently=True,
+            )
+        except Exception:
+            logger.exception("Could not send receipt email for payment %s", pay.id)
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
 class PaymentInitiateThrottle(AnonRateThrottle):
+    # Own scope, so status polling and other public calls
+    # don't use up this limit (the default anon scope is shared)
+    scope = "payment_initiate"
     rate = "5/min"
 
 
@@ -98,33 +123,45 @@ class MpesaCallback(APIView):
     throttle_classes = []
 
     def post(self, request, secret):
-        # Safaricom doesn't sign callbacks, so the URL itself carries a secret
-        if not hmac.compare_digest(secret, config("MPESA_CALLBACK_SECRET")):
+        # Safaricom doesn't sign callbacks, so the URL itself carries a secret.
+        # Compare as bytes so odd characters in the URL can't cause a 500 error.
+        if not hmac.compare_digest(secret.encode(), config("MPESA_CALLBACK_SECRET").encode()):
             return Response(status=404)
 
         cb = (request.data.get("Body") or {}).get("stkCallback") or {}
         pay = Payment.objects.filter(checkout_request_id=cb.get("CheckoutRequestID")).first()
 
-        if pay and pay.status == Payment.Status.PENDING:     # idempotent: ignore repeat callbacks
+        if pay and pay.status == Payment.Status.PENDING:
             pay.result_desc = str(cb.get("ResultDesc", ""))[:200]
+
             if cb.get("ResultCode") == 0:
                 items = {
                     i.get("Name"): i.get("Value")
                     for i in (cb.get("CallbackMetadata") or {}).get("Item", [])
                 }
+                paid_amount = items.get("Amount")
+                if paid_amount is not None and int(float(paid_amount)) != pay.amount:
+                    logger.warning(
+                        "Payment %s: expected KSh %s but M-Pesa reports KSh %s",
+                        pay.id, pay.amount, paid_amount,
+                    )
+
                 pay.status = Payment.Status.SUCCESS
                 pay.mpesa_receipt = str(items.get("MpesaReceiptNumber", ""))
                 pay.paid_at = timezone.now()
-                # Optional: also check items.get("Amount") == pay.amount before trusting it
+                pay.save()
+                logger.info("Payment %s succeeded (%s)", pay.id, pay.mpesa_receipt)
+                _send_receipt_email(pay)
             else:
                 pay.status = Payment.Status.FAILED
-            pay.save()
-            # TODO: send confirmation email here once payment succeeds
+                pay.save()
+                logger.info("Payment %s failed: %s", pay.id, pay.result_desc)
 
         return Response({"ResultCode": 0, "ResultDesc": "Accepted"})
 
 
 class PaymentStatus(APIView):
+    """The frontend polls this every few seconds after the M-Pesa prompt is sent."""
     permission_classes = [AllowAny]
     authentication_classes = []
 

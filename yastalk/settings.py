@@ -2,6 +2,7 @@
 Django settings for yastalk project.
 """
 
+from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
@@ -46,6 +47,7 @@ INSTALLED_APPS = [
 
     # third-party
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',     # lets logout revoke refresh tokens
     'corsheaders',
 
     # local
@@ -116,7 +118,10 @@ CACHES = {
 # ---------------------------------------------------------------------------
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
-    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 10},
+    },
     {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
@@ -145,7 +150,7 @@ STORAGES = {
     'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
 }
 
-# Uploaded images (e.g. TeamMember.photo) must live on Cloudinary in production,
+# Uploaded images (team photos, event images) must live on Cloudinary in production,
 # because Render's disk is wiped on every deploy. Active only when CLOUDINARY_URL is set.
 CLOUDINARY_URL = config('CLOUDINARY_URL', default='')
 if CLOUDINARY_URL:
@@ -169,11 +174,24 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         # raised from 30 so payment-status polling (every 3s) + page loads don't get blocked
         'anon': '60/minute',
+        'login': '10/minute',       # used by the login endpoint (per IP)
+        'register': '5/minute',     # used by the sign-up endpoint (per IP)
     },
 }
 if not DEBUG:
     # JSON only in production: skips the browsable-API HTML renderer
     REST_FRAMEWORK['DEFAULT_RENDERER_CLASSES'] = ['rest_framework.renderers.JSONRenderer']
+
+
+# ---------------------------------------------------------------------------
+# JWT login tokens for website accounts
+# ---------------------------------------------------------------------------
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,          # every refresh issues a new refresh token...
+    'BLACKLIST_AFTER_ROTATION': True,       # ...and revokes the old one
+}
 
 
 # ---------------------------------------------------------------------------

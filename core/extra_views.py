@@ -1,10 +1,10 @@
 from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.cache import cache_page
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_safe
 
 
-@require_GET
+@require_safe       # allows GET and HEAD, which uptime monitors often use
 def health(request):
     """Cheap endpoint for uptime pings (no database hit)."""
     return JsonResponse({'status': 'ok'})
