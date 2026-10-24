@@ -1,19 +1,22 @@
 import hmac
 import logging
-import re
 import threading
 from datetime import timedelta
 
 from decouple import config
 from django.core.mail import send_mail
+from django.db import transaction
 from django.utils import timezone
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
+from .auth_serializers import is_email_verified, normalize_phone
+from .donation_views import settle_mpesa_donation
 from .models import Payment
 from .mpesa import stk_push
+from .subscriptions import extend_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +29,6 @@ PLANS = {
     "standard": 999,
     "premium": 1699,
 }
-
-
-def normalize_phone(raw):
-    """Turn 0712345678 / +254712345678 / 712345678 into 254712345678, or None if invalid."""
-    p = re.sub(r"\D", "", raw or "")
-    if p.startswith("0"):
-        p = "254" + p[1:]
-    elif p[:1] in ("7", "1"):
-        p = "254" + p
-    return p if re.fullmatch(r"254[17]\d{8}", p) else None
 
 
 def _send_receipt_email(pay):
@@ -56,33 +49,61 @@ def _send_receipt_email(pay):
     threading.Thread(target=_send, daemon=True).start()
 
 
-class PaymentInitiateThrottle(AnonRateThrottle):
-    # Own scope, so status polling and other public calls
-    # don't use up this limit (the default anon scope is shared)
+class PlanList(APIView):
+    """GET /api/payments/plans/ - public. The prices the server will really charge,
+    so the pricing page can never show a different number from the one billed."""
+    permission_classes = [AllowAny]
+    authentication_classes = []     # a stale login token must not break a public page
+
+    def get(self, request):
+        return Response({
+            "currency": "KES",
+            "plans": [{"key": key, "amount": amount} for key, amount in PLANS.items()],
+        })
+
+
+class PaymentInitiateThrottle(UserRateThrottle):
+    # Per logged-in user, on its own scope so status polling and other calls
+    # don't use up this limit.
     scope = "payment_initiate"
     rate = "5/min"
 
 
 class InitiatePayment(APIView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    """POST {plan, phone?} -> sends an M-Pesa prompt. Needs a logged-in account."""
+    permission_classes = [IsAuthenticated]
     throttle_classes = [PaymentInitiateThrottle]
 
     def post(self, request):
+        user = request.user
         plan = request.data.get("plan")
-        email = (request.data.get("email") or "").strip()
-        phone = normalize_phone(request.data.get("phone"))
+
+        # Money only moves for accounts whose email we have confirmed, so receipts
+        # and password recovery always reach a real inbox.
+        if not is_email_verified(user):
+            return Response(
+                {
+                    "error": "Please confirm your email before paying. Open your Account page "
+                             "to get a new confirmation link.",
+                    "code": "email_not_verified",
+                },
+                status=403,
+            )
+
+        # The M-Pesa number can differ from the account phone; fall back to the profile phone
+        raw_phone = request.data.get("phone") or getattr(getattr(user, "profile", None), "phone", "")
+        phone = normalize_phone(raw_phone)
 
         if plan not in PLANS:
             return Response({"error": "Unknown plan"}, status=400)
         if not phone:
             return Response({"error": "Enter a valid Safaricom number, e.g. 0712345678"}, status=400)
-        if not email:
-            return Response({"error": "Email is required"}, status=400)
+        if not user.email:
+            return Response({"error": "Your account has no email address"}, status=400)
 
-        # Stop double payments: a pending request for the same phone+plan in the last 2 minutes
+        # Stop double payments: a pending request for the same account+plan in the last 2 minutes
         recent = Payment.objects.filter(
-            phone=phone, plan=plan, status=Payment.Status.PENDING,
+            user=user, plan=plan, status=Payment.Status.PENDING,
             created_at__gte=timezone.now() - timedelta(minutes=2),
         ).first()
         if recent:
@@ -91,7 +112,10 @@ class InitiatePayment(APIView):
                 status=409,
             )
 
-        pay = Payment.objects.create(email=email, phone=phone, plan=plan, amount=PLANS[plan])
+        # Email always comes from the account, never from the request
+        pay = Payment.objects.create(
+            user=user, email=user.email, phone=phone, plan=plan, amount=PLANS[plan]
+        )
 
         try:
             res = stk_push(phone, pay.amount, str(pay.id))
@@ -117,7 +141,7 @@ class InitiatePayment(APIView):
 
 
 class MpesaCallback(APIView):
-    """Called by Safaricom after the customer pays or cancels."""
+    """Called by Safaricom after the customer pays or cancels. Must stay public."""
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = []
@@ -125,48 +149,71 @@ class MpesaCallback(APIView):
     def post(self, request, secret):
         # Safaricom doesn't sign callbacks, so the URL itself carries a secret.
         # Compare as bytes so odd characters in the URL can't cause a 500 error.
-        if not hmac.compare_digest(secret.encode(), config("MPESA_CALLBACK_SECRET").encode()):
+        expected = config("MPESA_CALLBACK_SECRET", default="")
+        if not expected or not hmac.compare_digest(secret.encode(), expected.encode()):
             return Response(status=404)
 
         cb = (request.data.get("Body") or {}).get("stkCallback") or {}
-        pay = Payment.objects.filter(checkout_request_id=cb.get("CheckoutRequestID")).first()
+        checkout_id = cb.get("CheckoutRequestID")
+        send_receipt = None
+        is_plan_payment = False
 
-        if pay and pay.status == Payment.Status.PENDING:
-            pay.result_desc = str(cb.get("ResultDesc", ""))[:200]
+        if checkout_id:
+            # Lock the row so a duplicate callback can't mark it successful twice
+            with transaction.atomic():
+                pay = (
+                    Payment.objects.select_for_update()
+                    .filter(checkout_request_id=checkout_id)
+                    .first()
+                )
 
-            if cb.get("ResultCode") == 0:
-                items = {
-                    i.get("Name"): i.get("Value")
-                    for i in (cb.get("CallbackMetadata") or {}).get("Item", [])
-                }
-                paid_amount = items.get("Amount")
-                if paid_amount is not None and int(float(paid_amount)) != pay.amount:
-                    logger.warning(
-                        "Payment %s: expected KSh %s but M-Pesa reports KSh %s",
-                        pay.id, pay.amount, paid_amount,
-                    )
+                is_plan_payment = pay is not None
+                if pay and pay.status == Payment.Status.PENDING:
+                    pay.result_desc = str(cb.get("ResultDesc", ""))[:200]
 
-                pay.status = Payment.Status.SUCCESS
-                pay.mpesa_receipt = str(items.get("MpesaReceiptNumber", ""))
-                pay.paid_at = timezone.now()
-                pay.save()
-                logger.info("Payment %s succeeded (%s)", pay.id, pay.mpesa_receipt)
-                _send_receipt_email(pay)
-            else:
-                pay.status = Payment.Status.FAILED
-                pay.save()
-                logger.info("Payment %s failed: %s", pay.id, pay.result_desc)
+                    if cb.get("ResultCode") == 0:
+                        items = {
+                            i.get("Name"): i.get("Value")
+                            for i in (cb.get("CallbackMetadata") or {}).get("Item", [])
+                        }
+                        try:
+                            paid_amount = int(float(items.get("Amount")))
+                        except (TypeError, ValueError):
+                            paid_amount = None
+                        if paid_amount is not None and paid_amount != pay.amount:
+                            logger.warning(
+                                "Payment %s: expected KSh %s but M-Pesa reports KSh %s",
+                                pay.id, pay.amount, paid_amount,
+                            )
+
+                        pay.status = Payment.Status.SUCCESS
+                        pay.mpesa_receipt = str(items.get("MpesaReceiptNumber", ""))
+                        pay.paid_at = timezone.now()
+                        pay.save()
+                        if pay.user_id:
+                            extend_subscription(pay.user, pay.plan)   # unlocks / renews the plan
+                        logger.info("Payment %s succeeded (%s)", pay.id, pay.mpesa_receipt)
+                        send_receipt = pay
+                    else:
+                        pay.status = Payment.Status.FAILED
+                        pay.save()
+                        logger.info("Payment %s failed: %s", pay.id, pay.result_desc)
+
+            if send_receipt:
+                _send_receipt_email(send_receipt)
+            if not is_plan_payment:
+                settle_mpesa_donation(checkout_id, cb)     # not a plan payment: maybe a donation
 
         return Response({"ResultCode": 0, "ResultDesc": "Accepted"})
 
 
 class PaymentStatus(APIView):
-    """The frontend polls this every few seconds after the M-Pesa prompt is sent."""
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    """The frontend polls this every few seconds after the M-Pesa prompt is sent.
+    Only the account that made the payment can see it."""
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
-        pay = Payment.objects.filter(pk=pk).first()
+        pay = Payment.objects.filter(pk=pk, user=request.user).first()
         if not pay:
             return Response({"status": "not_found"}, status=404)
         return Response({
@@ -174,3 +221,23 @@ class PaymentStatus(APIView):
             "receipt": pay.mpesa_receipt if pay.status == Payment.Status.SUCCESS else "",
             "message": pay.result_desc if pay.status == Payment.Status.FAILED else "",
         })
+
+
+class PaymentHistory(APIView):
+    """GET /api/payments/ — the logged-in account's own payments, newest first."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        rows = Payment.objects.filter(user=request.user)[:50]
+        return Response([
+            {
+                "id": str(p.id),
+                "plan": p.plan,
+                "amount": p.amount,
+                "status": p.status,
+                "receipt": p.mpesa_receipt if p.status == Payment.Status.SUCCESS else "",
+                "created_at": p.created_at,
+                "paid_at": p.paid_at,
+            }
+            for p in rows
+        ])

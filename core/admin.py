@@ -1,24 +1,8 @@
-import csv
-
 from django.contrib import admin
-from django.contrib.auth import get_user_model
-from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from django.http import HttpResponse
-
 from .models import (
-    ContactMessage,
-    Event,
-    Language,
-    LoginActivity,
-    NewsletterSubscriber,
-    Payment,
-    Profile,
-    Service,
-    TeamMember,
-    Testimonial,
+    Language, Service, TeamMember, Testimonial, ContactMessage, NewsletterSubscriber,
+    Profile, LoginActivity, Event, Payment, Donation, Subscription,
 )
-
-User = get_user_model()
 
 
 @admin.register(Language)
@@ -48,106 +32,67 @@ class TestimonialAdmin(admin.ModelAdmin):
 class ContactMessageAdmin(admin.ModelAdmin):
     list_display = ['name', 'email', 'subject', 'created_at', 'is_read']
     list_filter = ['is_read', 'created_at']
-    search_fields = ['name', 'email', 'subject', 'message']
     readonly_fields = ['name', 'email', 'subject', 'message', 'created_at']
-    ordering = ['-created_at']
-
-
-@admin.action(description="Export selected as CSV")
-def export_subscribers_as_csv(modeladmin, request, queryset):
-    """Admin action: select rows (or select-all) -> download as CSV."""
-    response = HttpResponse(content_type='text/csv')
-    response['Content-Disposition'] = 'attachment; filename="yastalk_waitlist.csv"'
-    writer = csv.writer(response)
-    writer.writerow(['Email', 'Joined At'])
-    for sub in queryset.order_by('-created_at'):
-        writer.writerow([sub.email, sub.created_at.strftime('%Y-%m-%d %H:%M')])
-    return response
 
 
 @admin.register(NewsletterSubscriber)
 class NewsletterSubscriberAdmin(admin.ModelAdmin):
     list_display = ['email', 'created_at']
-    search_fields = ['email']
-    ordering = ['-created_at']
-    date_hierarchy = 'created_at'
-    actions = [export_subscribers_as_csv]
 
 
-@admin.register(Payment)
-class PaymentAdmin(admin.ModelAdmin):
-    list_display = [
-        'created_at', 'plan', 'amount', 'phone', 'email',
-        'status', 'mpesa_receipt', 'result_desc',
-    ]
-    list_filter = ['status', 'plan', 'created_at']
-    search_fields = ['email', 'phone', 'mpesa_receipt', 'checkout_request_id']
-    ordering = ['-created_at']
-    date_hierarchy = 'created_at'
-    # Payments are created by the website and updated by Safaricom's callback,
-    # so every field is read-only in the admin.
-    readonly_fields = [
-        'id', 'email', 'phone', 'plan', 'amount', 'status',
-        'checkout_request_id', 'mpesa_receipt', 'result_desc',
-        'created_at', 'paid_at',
-    ]
-
-    def has_add_permission(self, request):
-        return False        # nobody should create a "paid" record by hand
-
-
-@admin.register(Event)
-class EventAdmin(admin.ModelAdmin):
-    list_display = ['title', 'kind', 'starts_at', 'location', 'is_published']
-    list_filter = ['kind', 'is_published', 'starts_at']
-    list_editable = ['is_published']
-    search_fields = ['title', 'summary', 'location']
-    prepopulated_fields = {'slug': ('title',)}      # slug fills in as you type the title
-    date_hierarchy = 'starts_at'
-
-
-class ProfileInline(admin.StackedInline):
-    model = Profile
-    can_delete = False
-
-
-admin.site.unregister(User)
-
-
-@admin.register(User)
-class UserAdmin(BaseUserAdmin):
-    inlines = [ProfileInline]
-    list_display = [
-        'email', 'first_name', 'last_name',
-        'is_active', 'is_staff', 'date_joined', 'last_login',
-    ]
-    list_filter = ['is_active', 'is_staff', 'date_joined']
-    search_fields = ['email', 'first_name', 'last_name', 'profile__phone']
-    ordering = ['-date_joined']
-    actions = ['deactivate_users', 'activate_users']
-
-    @admin.action(description='Deactivate selected users (they can no longer log in)')
-    def deactivate_users(self, request, queryset):
-        queryset.exclude(is_superuser=True).update(is_active=False)
-
-    @admin.action(description='Re-activate selected users')
-    def activate_users(self, request, queryset):
-        queryset.update(is_active=True)
+@admin.register(Profile)
+class ProfileAdmin(admin.ModelAdmin):
+    list_display = ['user', 'phone', 'email_verified', 'created_at']
+    list_filter = ['email_verified']
+    list_editable = ['email_verified']      # tick this to confirm someone by hand
+    search_fields = ['user__email', 'user__username', 'phone']
+    readonly_fields = ['user', 'created_at']
 
 
 @admin.register(LoginActivity)
 class LoginActivityAdmin(admin.ModelAdmin):
-    list_display = ['created_at', 'email_attempted', 'success', 'ip_address', 'user']
+    list_display = ['email_attempted', 'success', 'ip_address', 'created_at']
     list_filter = ['success', 'created_at']
     search_fields = ['email_attempted', 'ip_address']
-    date_hierarchy = 'created_at'
-    readonly_fields = [
-        'user', 'email_attempted', 'success',
-        'ip_address', 'user_agent', 'created_at',
-    ]
+    readonly_fields = ['user', 'email_attempted', 'success', 'ip_address', 'user_agent', 'created_at']
 
     def has_add_permission(self, request):
         return False
 
-    def has_change_permission(self, request, obj=None):
-        return False        # an audit log should not be editable
+
+@admin.register(Event)
+class EventAdmin(admin.ModelAdmin):
+    """Post and edit the events shown on the website. Untick is_published to keep a draft."""
+    list_display = ['title', 'kind', 'starts_at', 'location', 'is_published']
+    list_filter = ['kind', 'is_published']
+    list_editable = ['is_published']
+    search_fields = ['title', 'summary', 'location']
+    prepopulated_fields = {'slug': ('title',)}
+    date_hierarchy = 'starts_at'
+
+
+@admin.register(Payment)
+class PaymentAdmin(admin.ModelAdmin):
+    list_display = ['created_at', 'user', 'plan', 'amount', 'status', 'mpesa_receipt']
+    list_filter = ['status', 'plan']
+    search_fields = ['email', 'phone', 'mpesa_receipt']
+    readonly_fields = [f.name for f in Payment._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(Donation)
+class DonationAdmin(admin.ModelAdmin):
+    """Crypto gifts arrive as 'pending': check the hash on bscscan.com, then set the amount and status."""
+    list_display = ['created_at', 'method', 'donor_name', 'amount', 'status', 'is_anonymous']
+    list_filter = ['method', 'status', 'is_anonymous']
+    search_fields = ['donor_name', 'donor_email', 'phone', 'mpesa_receipt', 'tx_hash', 'provider_ref']
+    readonly_fields = ['id', 'method', 'phone', 'provider_ref', 'mpesa_receipt', 'tx_hash', 'created_at']
+
+
+@admin.register(Subscription)
+class SubscriptionAdmin(admin.ModelAdmin):
+    """Give or extend access by hand (for example for a gift or a refund) by editing active_until."""
+    list_display = ['user', 'plan', 'active_until']
+    search_fields = ['user__email']

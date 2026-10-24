@@ -24,9 +24,12 @@ DEBUG = config('DEBUG', default=False, cast=bool)
 if not DEBUG and SECRET_KEY == _INSECURE_KEY:
     raise ImproperlyConfigured('Set DJANGO_SECRET_KEY in the environment for production.')
 
+# Move the admin login away from the guessable /admin/ (set ADMIN_URL=my-secret-path/)
+ADMIN_URL = config('ADMIN_URL', default='admin/').strip('/') + '/'
+
 ALLOWED_HOSTS = config(
     'ALLOWED_HOSTS',
-    default='yastalk.onrender.com,localhost,127.0.0.1',
+    default='yas-talk.onrender.com,localhost,127.0.0.1',
     cast=Csv(),
 )
 _render_host = config('RENDER_EXTERNAL_HOSTNAME', default='')   # set automatically by Render
@@ -56,9 +59,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',          # high in the list
     'whitenoise.middleware.WhiteNoiseMiddleware',
-    'django.middleware.gzip.GZipMiddleware',            # compress API JSON responses
-    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.gzip.GZipMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -94,16 +97,15 @@ WSGI_APPLICATION = 'yastalk.wsgi.application'
 DATABASES = {
     'default': dj_database_url.config(
         default=f'sqlite:///{BASE_DIR / "db.sqlite3"}',
-        conn_max_age=600,           # reuse connections instead of reconnecting every request
-        conn_health_checks=True,    # drop stale connections (Neon sleeps idle databases)
+        conn_max_age=600,
+        conn_health_checks=True,
     )
 }
-# Needed when using Neon's pooled (pgbouncer) connection string
 DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
 
 
 # ---------------------------------------------------------------------------
-# Cache (used for the M-Pesa token and cached public endpoints)
+# Cache
 # ---------------------------------------------------------------------------
 CACHES = {
     'default': {
@@ -150,8 +152,6 @@ STORAGES = {
     'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
 }
 
-# Uploaded images (team photos, event images) must live on Cloudinary in production,
-# because Render's disk is wiped on every deploy. Active only when CLOUDINARY_URL is set.
 CLOUDINARY_URL = config('CLOUDINARY_URL', default='')
 if CLOUDINARY_URL:
     INSTALLED_APPS += ['cloudinary_storage', 'cloudinary']
@@ -165,86 +165,132 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # REST Framework
 # ---------------------------------------------------------------------------
 REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',
+        'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        # raised from 30 so payment-status polling (every 3s) + page loads don't get blocked
         'anon': '60/minute',
-        'login': '10/minute',       # used by the login endpoint (per IP)
-        'register': '5/minute',     # used by the sign-up endpoint (per IP)
+        'login': '10/minute',
+        'register': '5/minute',
+        'password_reset': '5/hour',
+        'verify': '30/hour',
+        'verify_resend': '5/hour',
+        'change_password': '10/hour',
+        'donate': '12/hour',
+        'donate_status': '120/minute',
     },
 }
+# Only set this once you are sure how many proxies sit in front of Django.
+# A wrong number makes every visitor look like the same IP. Leave unset if unsure:
+# the per-email login lockout protects accounts either way.
+_NUM_PROXIES = config('NUM_PROXIES', default='')
+if _NUM_PROXIES:
+    REST_FRAMEWORK['NUM_PROXIES'] = int(_NUM_PROXIES)
 if not DEBUG:
-    # JSON only in production: skips the browsable-API HTML renderer
     REST_FRAMEWORK['DEFAULT_RENDERER_CLASSES'] = ['rest_framework.renderers.JSONRenderer']
 
 
 # ---------------------------------------------------------------------------
-# JWT login tokens for website accounts
+# JWT
 # ---------------------------------------------------------------------------
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS': True,          # every refresh issues a new refresh token...
-    'BLACKLIST_AFTER_ROTATION': True,       # ...and revokes the old one
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
 }
 
 
 # ---------------------------------------------------------------------------
-# CORS / CSRF (React dev server + production frontend on Vercel)
+# Password reset links
+# ---------------------------------------------------------------------------
+FRONTEND_URL = config('FRONTEND_URL', default='https://yas-talk.vercel.app')
+PASSWORD_RESET_TIMEOUT = 3600
+
+
+# ---------------------------------------------------------------------------
+# CORS / CSRF
 # ---------------------------------------------------------------------------
 _FRONTEND_ORIGINS = (
     'https://yas-talk-50hg0pris-greenlightled.vercel.app,'
     'https://yas-talk.vercel.app,'
     'http://localhost:5173,'
-    'http://127.0.0.1:5173'
+    'http://127.0.0.1:5173,'
+    'http://localhost:5176,'
+    'http://127.0.0.1:5176'
 )
 CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default=_FRONTEND_ORIGINS, cast=Csv())
 CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default=_FRONTEND_ORIGINS, cast=Csv())
 
-# Vercel preview deployments get a new URL each time (yas-talk-<hash>-greenlightled.vercel.app)
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r'^https://yas-talk-[a-z0-9]+-greenlightled\.vercel\.app$',
 ]
 
+# Allow all origins while developing (removes CORS headaches locally)
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+
 
 # ---------------------------------------------------------------------------
-# Production security (Render terminates HTTPS in front of Django)
+# Production security
 # ---------------------------------------------------------------------------
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=True, cast=bool)
-    SECURE_REDIRECT_EXEMPT = [r'^api/health/$']     # so uptime pings never get redirected
+    SECURE_REDIRECT_EXEMPT = [r'^api/health/$']
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    SECURE_HSTS_SECONDS = 3600      # start low; raise to 31536000 once everything works
+    SECURE_HSTS_SECONDS = config('HSTS_SECONDS', default=31536000, cast=int)   # 1 year
     SECURE_CONTENT_TYPE_NOSNIFF = True
 
 
 # ---------------------------------------------------------------------------
-# Email (contact form / payment confirmations)
+# Email
 # ---------------------------------------------------------------------------
+# Render's free tier blocks SMTP ports (25/465/587), so on the live site mail
+# goes out through Brevo's HTTPS API instead. Set BREVO_API_KEY to turn it on.
+#   BREVO_API_KEY  -> Brevo API (use this on Render)
+#   EMAIL_HOST_USER -> classic SMTP (works locally, NOT on Render free)
+#   neither        -> emails are printed in the terminal (handy in development)
+BREVO_API_KEY = config('BREVO_API_KEY', default='')
 EMAIL_HOST = config('EMAIL_HOST', default='smtp.gmail.com')
 EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
 EMAIL_USE_TLS = True
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
-EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')   # Gmail: use an App Password
-EMAIL_TIMEOUT = 10      # never let a slow mail server hang a worker
-EMAIL_BACKEND = (
-    'django.core.mail.backends.smtp.EmailBackend'
-    if EMAIL_HOST_USER
-    else 'django.core.mail.backends.console.EmailBackend'
-)
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+EMAIL_TIMEOUT = 10
+
+if BREVO_API_KEY:
+    INSTALLED_APPS += ['anymail']
+    EMAIL_BACKEND = 'anymail.backends.brevo.EmailBackend'
+    ANYMAIL = {'BREVO_API_KEY': BREVO_API_KEY, 'REQUESTS_TIMEOUT': (5, 15)}
+elif EMAIL_HOST_USER:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+    if not DEBUG:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            'No email provider configured: password-reset and verification emails '
+            'will NOT be delivered. Set BREVO_API_KEY.'
+        )
+
+# Must be a sender you have verified in Brevo (Senders & IP), e.g.
+#   DEFAULT_FROM_EMAIL=YasTalk <you@yourdomain.com>
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER or 'noreply@yastalk.com')
+
+# How long an email-verification link stays valid
+EMAIL_VERIFY_MAX_AGE = 3 * 24 * 3600   # 3 days
 
 
 # ---------------------------------------------------------------------------
-# Direct links to the app being built (served by /api/app-links/)
-# Empty values are hidden; fill them in on Render when each link exists.
+# App links
 # ---------------------------------------------------------------------------
 APP_LINKS = {
     'web_app': config('APP_WEB_URL', default=''),
@@ -255,7 +301,7 @@ APP_LINKS = {
 
 
 # ---------------------------------------------------------------------------
-# Logging: errors and payment events show up in Render's log stream
+# Logging
 # ---------------------------------------------------------------------------
 LOGGING = {
     'version': 1,
@@ -271,3 +317,16 @@ LOGGING = {
         'core': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
     },
 }
+
+
+# ---- Donations, card payments and subscriptions ----------------------------------------
+# Card payments go through Paystack (hosted checkout, pays out to your Kenyan bank account).
+PAYSTACK_SECRET_KEY = config('PAYSTACK_SECRET_KEY', default='')
+# Shown on the donate page when set. Paybill: the number M-Pesa customers type in by hand.
+DONATION_PAYBILL = config('DONATION_PAYBILL', default='')
+DONATION_PAYBILL_ACCOUNT = config('DONATION_PAYBILL_ACCOUNT', default='YASTALK')
+# Your BNB Smart Chain (BEP-20) wallet address, shown with a QR code. Leave empty to hide crypto.
+DONATION_BEP20_ADDRESS = config('DONATION_BEP20_ADDRESS', default='')
+DONATION_CRYPTO_TOKENS = config('DONATION_CRYPTO_TOKENS', default='USDT,USDC,BNB')
+# Each successful plan payment buys this many days of access.
+SUBSCRIPTION_DAYS = config('SUBSCRIPTION_DAYS', default=30, cast=int)

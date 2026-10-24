@@ -1,3 +1,5 @@
+import re
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -5,9 +7,21 @@ from django.db import transaction
 from django.db.models import Q
 from rest_framework import serializers
 
+from .subscriptions import subscription_payload
 from .models import Profile
 
 User = get_user_model()
+
+
+def normalize_phone(raw):
+    """Turn 0712345678 / +254712345678 / 712345678 into 254712345678.
+    Returns None if the number is not a valid Kenyan mobile number."""
+    digits = re.sub(r'\D', '', str(raw or ''))
+    if digits.startswith('0'):
+        digits = '254' + digits[1:]
+    elif digits[:1] in ('7', '1'):
+        digits = '254' + digits
+    return digits if re.fullmatch(r'254[17]\d{8}', digits) else None
 
 
 class RegisterSerializer(serializers.Serializer):
@@ -22,6 +36,15 @@ class RegisterSerializer(serializers.Serializer):
         if User.objects.filter(Q(username__iexact=value) | Q(email__iexact=value)).exists():
             raise serializers.ValidationError('An account with this email already exists.')
         return value
+
+    def validate_phone(self, value):
+        value = (value or '').strip()
+        if not value:
+            return ''
+        phone = normalize_phone(value)
+        if not phone:
+            raise serializers.ValidationError('Enter a valid Kenyan number, e.g. 0712345678.')
+        return phone
 
     def validate(self, attrs):
         # Django's validators: minimum length, common passwords, numeric-only, similarity to user data
@@ -45,6 +68,14 @@ class RegisterSerializer(serializers.Serializer):
         return user
 
 
+def is_email_verified(user):
+    """True once the person has clicked the link we emailed them (staff are exempt)."""
+    if user.is_staff:
+        return True
+    profile = getattr(user, 'profile', None)
+    return bool(profile and profile.email_verified)
+
+
 def user_payload(user):
     profile = getattr(user, 'profile', None)
     return {
@@ -53,5 +84,7 @@ def user_payload(user):
         'first_name': user.first_name,
         'last_name': user.last_name,
         'phone': profile.phone if profile else '',
+        'email_verified': is_email_verified(user),
+        'subscription': subscription_payload(user),
         'date_joined': user.date_joined,
     }
