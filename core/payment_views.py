@@ -13,10 +13,8 @@ from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
 from .auth_serializers import is_email_verified, normalize_phone
-from .donation_views import settle_mpesa_donation
 from .models import Payment
 from .mpesa import stk_push
-from .subscriptions import extend_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -47,19 +45,6 @@ def _send_receipt_email(pay):
             logger.exception("Could not send receipt email for payment %s", pay.id)
 
     threading.Thread(target=_send, daemon=True).start()
-
-
-class PlanList(APIView):
-    """GET /api/payments/plans/ - public. The prices the server will really charge,
-    so the pricing page can never show a different number from the one billed."""
-    permission_classes = [AllowAny]
-    authentication_classes = []     # a stale login token must not break a public page
-
-    def get(self, request):
-        return Response({
-            "currency": "KES",
-            "plans": [{"key": key, "amount": amount} for key, amount in PLANS.items()],
-        })
 
 
 class PaymentInitiateThrottle(UserRateThrottle):
@@ -156,7 +141,6 @@ class MpesaCallback(APIView):
         cb = (request.data.get("Body") or {}).get("stkCallback") or {}
         checkout_id = cb.get("CheckoutRequestID")
         send_receipt = None
-        is_plan_payment = False
 
         if checkout_id:
             # Lock the row so a duplicate callback can't mark it successful twice
@@ -167,7 +151,6 @@ class MpesaCallback(APIView):
                     .first()
                 )
 
-                is_plan_payment = pay is not None
                 if pay and pay.status == Payment.Status.PENDING:
                     pay.result_desc = str(cb.get("ResultDesc", ""))[:200]
 
@@ -190,8 +173,6 @@ class MpesaCallback(APIView):
                         pay.mpesa_receipt = str(items.get("MpesaReceiptNumber", ""))
                         pay.paid_at = timezone.now()
                         pay.save()
-                        if pay.user_id:
-                            extend_subscription(pay.user, pay.plan)   # unlocks / renews the plan
                         logger.info("Payment %s succeeded (%s)", pay.id, pay.mpesa_receipt)
                         send_receipt = pay
                     else:
@@ -201,8 +182,6 @@ class MpesaCallback(APIView):
 
             if send_receipt:
                 _send_receipt_email(send_receipt)
-            if not is_plan_payment:
-                settle_mpesa_donation(checkout_id, cb)     # not a plan payment: maybe a donation
 
         return Response({"ResultCode": 0, "ResultDesc": "Accepted"})
 
@@ -240,4 +219,4 @@ class PaymentHistory(APIView):
                 "paid_at": p.paid_at,
             }
             for p in rows
-        ])
+        ])

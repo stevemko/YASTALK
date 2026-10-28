@@ -7,7 +7,6 @@ from django.db import transaction
 from django.db.models import Q
 from rest_framework import serializers
 
-from .subscriptions import subscription_payload
 from .models import Profile
 
 User = get_user_model()
@@ -85,6 +84,5 @@ def user_payload(user):
         'last_name': user.last_name,
         'phone': profile.phone if profile else '',
         'email_verified': is_email_verified(user),
-        'subscription': subscription_payload(user),
         'date_joined': user.date_joined,
-    }
+    }

@@ -182,8 +182,6 @@ REST_FRAMEWORK = {
         'verify': '30/hour',
         'verify_resend': '5/hour',
         'change_password': '10/hour',
-        'donate': '12/hour',
-        'donate_status': '120/minute',
     },
 }
 # Only set this once you are sure how many proxies sit in front of Django.
@@ -316,17 +314,4 @@ LOGGING = {
     'loggers': {
         'core': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
     },
-}
-
-
-# ---- Donations, card payments and subscriptions ----------------------------------------
-# Card payments go through Paystack (hosted checkout, pays out to your Kenyan bank account).
-PAYSTACK_SECRET_KEY = config('PAYSTACK_SECRET_KEY', default='')
-# Shown on the donate page when set. Paybill: the number M-Pesa customers type in by hand.
-DONATION_PAYBILL = config('DONATION_PAYBILL', default='')
-DONATION_PAYBILL_ACCOUNT = config('DONATION_PAYBILL_ACCOUNT', default='YASTALK')
-# Your BNB Smart Chain (BEP-20) wallet address, shown with a QR code. Leave empty to hide crypto.
-DONATION_BEP20_ADDRESS = config('DONATION_BEP20_ADDRESS', default='')
-DONATION_CRYPTO_TOKENS = config('DONATION_CRYPTO_TOKENS', default='USDT,USDC,BNB')
-# Each successful plan payment buys this many days of access.
-SUBSCRIPTION_DAYS = config('SUBSCRIPTION_DAYS', default=30, cast=int)
+}

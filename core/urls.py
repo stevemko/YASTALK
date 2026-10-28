@@ -25,14 +25,8 @@ from .auth_views import (
 )
 
 from .extra_views import health, app_links
-from .event_views import EventListView, EventDetailView
-from .donation_views import (
-    DonationConfig, DonateMpesa, DonationStatus, DonateCard, VerifyCard,
-    PaystackWebhook, DonateCrypto,
-)
 from .payment_views import (
     InitiatePayment,
-    PlanList,
     MpesaCallback,
     PaymentStatus,
     PaymentHistory,
@@ -78,18 +72,6 @@ urlpatterns = [
 
     # Payments
     path('payments/', PaymentHistory.as_view(), name='payment-history'),
-    path('events/', EventListView.as_view(), name='event-list'),
-    path('events/<slug:slug>/', EventDetailView.as_view(), name='event-detail'),
-
-    path('donations/config/', DonationConfig.as_view(), name='donation-config'),
-    path('donations/mpesa/', DonateMpesa.as_view(), name='donation-mpesa'),
-    path('donations/<uuid:pk>/status/', DonationStatus.as_view(), name='donation-status'),
-    path('donations/card/', DonateCard.as_view(), name='donation-card'),
-    path('donations/card/verify/', VerifyCard.as_view(), name='donation-card-verify'),
-    path('donations/paystack/webhook/', PaystackWebhook.as_view(), name='donation-paystack-webhook'),
-    path('donations/crypto/', DonateCrypto.as_view(), name='donation-crypto'),
-
-    path('payments/plans/', PlanList.as_view(), name='payment-plans'),
     path('payments/initiate/', InitiatePayment.as_view(), name='payment-initiate'),
     path(
         'payments/mpesa/callback/<str:secret>/',
@@ -101,4 +83,4 @@ urlpatterns = [
         PaymentStatus.as_view(),
         name='payment-status'
     ),
-]
+]
