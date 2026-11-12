@@ -31,8 +31,9 @@ from .mpesa import stk_push
 
 logger = logging.getLogger(__name__)
 
-PRESETS = [200, 500, 1000, 2500, 5000]      # amount buttons on the donate page (KSh)
-MIN_AMOUNT, MAX_AMOUNT = 20, 150000         # 150,000 is M-Pesa's per-transaction limit
+PRESETS = [5, 50, 200, 500, 1000, 2500, 5000]   # amount buttons on the donate page (KSh)
+MIN_AMOUNT = 5                                   # giving starts at KSh 5
+MAX_AMOUNT = None                                # no upper limit
 PAYSTACK_API = 'https://api.paystack.co'
 TX_HASH = re.compile(r'^0x[a-fA-F0-9]{64}$')
 EVM_ADDRESS = re.compile(r'^0x[a-fA-F0-9]{40}$')
@@ -50,11 +51,28 @@ def _parse_amount(value):
         amount = int(str(value).strip())
     except (TypeError, ValueError):
         return None
-    return amount if MIN_AMOUNT <= amount <= MAX_AMOUNT else None
+    if amount < MIN_AMOUNT:
+        return None
+    # Storage is a PostgreSQL/SQLite integer; clamp at the column ceiling rather than overflow.
+    return min(amount, 2147483647)
 
 
 def _amount_error():
-    return {'error': f'Enter an amount between KSh {MIN_AMOUNT:,} and KSh {MAX_AMOUNT:,}.'}
+    return {'error': f'Enter an amount of at least KSh {MIN_AMOUNT:,}. There is no upper limit.'}
+
+
+def _bank_details():
+    """Bank transfer details, shown only once an account number has been set."""
+    number = (settings.DONATION_BANK_ACCOUNT_NUMBER or '').strip()
+    if not number:
+        return None
+    return {
+        'bank_name': (settings.DONATION_BANK_NAME or '').strip(),
+        'account_name': (settings.DONATION_BANK_ACCOUNT_NAME or '').strip(),
+        'account_number': number,
+        'branch': (settings.DONATION_BANK_BRANCH or '').strip(),
+        'swift': (settings.DONATION_BANK_SWIFT or '').strip(),
+    }
 
 
 def _donor_fields(data):
@@ -118,6 +136,7 @@ class DonationConfig(APIView):
         paybill = None
         if settings.DONATION_PAYBILL:
             paybill = {'number': settings.DONATION_PAYBILL, 'account': settings.DONATION_PAYBILL_ACCOUNT}
+        bank = _bank_details()
         return Response({
             'currency': 'KES',
             'presets': PRESETS,
@@ -128,8 +147,10 @@ class DonationConfig(APIView):
                 'paybill': bool(paybill),
                 'card': bool(settings.PAYSTACK_SECRET_KEY),
                 'crypto': bool(crypto),
+                'bank': bool(bank),
             },
             'paybill': paybill,
+            'bank': bank,
             'crypto': crypto,
         })
 

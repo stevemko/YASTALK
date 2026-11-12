@@ -1,11 +1,43 @@
+import logging
+import threading
+
+from django.conf import settings
+from django.core.mail import EmailMessage
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email
 from rest_framework import viewsets, mixins, generics, status
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from .models import Language, Service, TeamMember, Testimonial, ContactMessage, NewsletterSubscriber
+
+logger = logging.getLogger(__name__)
+
+
+def _email_enquiry(message):
+    """Forward a website enquiry to the team inbox without slowing the request."""
+    def _send():
+        try:
+            subject = message.subject or f'New enquiry from {message.name}'
+            body = (
+                f'Name: {message.name}\n'
+                f'Email: {message.email}\n'
+                f'Subject: {message.subject or "(none)"}\n\n'
+                f'{message.message}\n\n'
+                f'— Sent from the YasTalk website'
+            )
+            EmailMessage(
+                subject=f'[YasTalk] {subject}',
+                body=body,
+                to=[settings.CONTACT_EMAIL],
+                reply_to=[message.email],
+            ).send(fail_silently=True)
+        except Exception:
+            logger.exception('Could not forward enquiry %s', message.pk)
+
+    threading.Thread(target=_send, daemon=True).start()
 from .serializers import (
     LanguageSerializer,
     ServiceSerializer,
@@ -41,23 +73,28 @@ class TestimonialViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, views
 
 
 class ContactMessageCreateView(generics.CreateAPIView):
-    """POST /api/contact/ — enquiries need a logged-in account.
+    """POST /api/contact/ — open to everyone, no account needed.
 
-    The sender's name and email always come from the account, never from the
-    request body, so nobody can send an enquiry pretending to be someone else.
+    Guests fill in their own name and email; for a logged-in sender those two
+    fields are taken from the account so the enquiry cannot be sent under
+    someone else's identity.
     """
     queryset = ContactMessage.objects.all()
     serializer_class = ContactMessageSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'contact'
 
     def create(self, request, *args, **kwargs):
-        user = request.user
+        user = request.user if request.user.is_authenticated else None
         data = request.data.copy()
-        data['name'] = user.get_full_name() or user.email
-        data['email'] = user.email
+        if user:
+            data['name'] = user.get_full_name() or user.email
+            data['email'] = user.email
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(user=user)
+        message = serializer.save(user=user)
+        _email_enquiry(message)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 

@@ -74,7 +74,7 @@ class Testimonial(models.Model):
 
 
 class ContactMessage(models.Model):
-    """An enquiry. Sent by a logged-in account; name and email come from the account."""
+    """An enquiry. Anyone may send one; guests give their name and email, accounts have them filled in."""
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         null=True, blank=True, related_name='enquiries',
@@ -211,4 +211,61 @@ class LoginActivity(models.Model):
 
     def __str__(self):
         status = 'ok' if self.success else 'failed'
-        return f"{self.email_attempted} - {status} - {self.created_at:%Y-%m-%d %H:%M}"
+        return f"{self.email_attempted} - {status} - {self.created_at:%Y-%m-%d %H:%M}"
+
+class Donation(models.Model):
+    """A gift through the website: M-Pesa prompt, card (Paystack) or crypto."""
+
+    class Method(models.TextChoices):
+        MPESA = 'mpesa', 'M-Pesa'
+        CARD = 'card', 'Card'
+        CRYPTO = 'crypto', 'Crypto (BEP-20)'
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        SUCCESS = 'success', 'Success'
+        FAILED = 'failed', 'Failed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    method = models.CharField(max_length=10, choices=Method.choices)
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    amount = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text='KSh. For crypto, fill this in after you have checked the transfer on BscScan.',
+    )
+    donor_name = models.CharField(max_length=120, blank=True)
+    donor_email = models.EmailField(blank=True)
+    phone = models.CharField(max_length=12, blank=True)
+    message = models.CharField(max_length=280, blank=True)
+    is_anonymous = models.BooleanField(default=False, help_text='Do not name this person publicly')
+    provider_ref = models.CharField(
+        max_length=100, blank=True, db_index=True,
+        help_text='M-Pesa CheckoutRequestID or Paystack reference',
+    )
+    mpesa_receipt = models.CharField(max_length=30, blank=True)
+    tx_hash = models.CharField(max_length=80, blank=True, db_index=True, help_text='Crypto transaction hash')
+    result_desc = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        label = self.amount if self.amount is not None else 'unconfirmed'
+        return f"{self.get_method_display()} gift - KSh {label} [{self.status}]"
+
+
+class Subscription(models.Model):
+    """How long a paying account keeps its plan. One per account."""
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='subscription'
+    )
+    plan = models.CharField(max_length=30)
+    active_until = models.DateTimeField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user} - {self.plan} until {self.active_until:%Y-%m-%d}"

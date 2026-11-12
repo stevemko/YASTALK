@@ -1,7 +1,9 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 db.sqlite3
 .env
 staticfiles/
-media/test_api.sh
+media/
+_broken_migrations_backup/

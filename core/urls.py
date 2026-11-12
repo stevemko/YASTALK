@@ -25,11 +25,22 @@ from .auth_views import (
 )
 
 from .extra_views import health, app_links
+from .event_views import EventDetailView, EventListView
+from .donation_views import (
+    DonateCard,
+    DonateCrypto,
+    DonateMpesa,
+    DonationConfig,
+    DonationStatus,
+    PaystackWebhook,
+    VerifyCard,
+)
 from .payment_views import (
     InitiatePayment,
     MpesaCallback,
     PaymentStatus,
     PaymentHistory,
+    PlansView,
 )
 
 router = DefaultRouter()
@@ -70,8 +81,22 @@ urlpatterns = [
         name='auth-password-reset-confirm'
     ),
 
+    # Events (public)
+    path('events/', EventListView.as_view(), name='event-list'),
+    path('events/<slug:slug>/', EventDetailView.as_view(), name='event-detail'),
+
+    # Donations (public: no account needed)
+    path('donations/config/', DonationConfig.as_view(), name='donation-config'),
+    path('donations/mpesa/', DonateMpesa.as_view(), name='donate-mpesa'),
+    path('donations/<uuid:pk>/status/', DonationStatus.as_view(), name='donation-status'),
+    path('donations/card/', DonateCard.as_view(), name='donate-card'),
+    path('donations/card/verify/', VerifyCard.as_view(), name='donate-card-verify'),
+    path('donations/crypto/', DonateCrypto.as_view(), name='donate-crypto'),
+    path('donations/paystack/webhook/', PaystackWebhook.as_view(), name='paystack-webhook'),
+
     # Payments
     path('payments/', PaymentHistory.as_view(), name='payment-history'),
+    path('payments/plans/', PlansView.as_view(), name='payment-plans'),
     path('payments/initiate/', InitiatePayment.as_view(), name='payment-initiate'),
     path(
         'payments/mpesa/callback/<str:secret>/',

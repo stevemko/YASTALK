@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     Language, Service, TeamMember, Testimonial, ContactMessage, NewsletterSubscriber,
-    Profile, LoginActivity,
+    Profile, LoginActivity, Payment, Event, Donation, Subscription,
 )
 
 
@@ -58,3 +58,39 @@ class LoginActivityAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+@admin.register(Event)
+class EventAdmin(admin.ModelAdmin):
+    list_display = ['title', 'kind', 'starts_at', 'location', 'is_published']
+    list_filter = ['kind', 'is_published', 'starts_at']
+    list_editable = ['is_published']
+    search_fields = ['title', 'summary', 'location']
+    prepopulated_fields = {'slug': ('title',)}
+
+
+@admin.register(Payment)
+class PaymentAdmin(admin.ModelAdmin):
+    list_display = ['plan', 'email', 'amount', 'status', 'mpesa_receipt', 'created_at']
+    list_filter = ['status', 'plan', 'created_at']
+    search_fields = ['email', 'phone', 'mpesa_receipt']
+    readonly_fields = ['id', 'created_at', 'paid_at']
+
+
+@admin.register(Donation)
+class DonationAdmin(admin.ModelAdmin):
+    list_display = ['method', 'display_amount', 'donor_name', 'status', 'created_at', 'paid_at']
+    list_filter = ['method', 'status', 'created_at']
+    search_fields = ['donor_name', 'donor_email', 'phone', 'mpesa_receipt', 'tx_hash']
+    readonly_fields = ['id', 'created_at', 'paid_at']
+
+    @admin.display(description='Amount (KSh)')
+    def display_amount(self, obj):
+        return obj.amount if obj.amount is not None else '—'
+
+
+@admin.register(Subscription)
+class SubscriptionAdmin(admin.ModelAdmin):
+    list_display = ['user', 'plan', 'active_until', 'updated_at']
+    list_filter = ['plan', 'active_until']
+    search_fields = ['user__email', 'user__username']

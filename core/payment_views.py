@@ -4,6 +4,7 @@ import threading
 from datetime import timedelta
 
 from decouple import config
+from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
@@ -15,6 +16,7 @@ from rest_framework.views import APIView
 from .auth_serializers import is_email_verified, normalize_phone
 from .models import Payment
 from .mpesa import stk_push
+from .subscriptions import extend_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,7 @@ logger = logging.getLogger(__name__)
 # These are placeholders. The server decides the price, never the browser,
 # and the plan keys must match the ones your frontend sends.
 PLANS = {
+    "free": 0,
     "mini": 499,
     "basic": 699,
     "standard": 999,
@@ -54,6 +57,20 @@ class PaymentInitiateThrottle(UserRateThrottle):
     rate = "5/min"
 
 
+class PlansView(APIView):
+    """GET /api/payments/plans/ — the plans and the prices the server will charge."""
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        return Response({
+            "plans": [{"key": key, "amount": amount} for key, amount in PLANS.items()],
+            "currency": "KES",
+            "billing": "monthly",
+            "subscription_days": settings.SUBSCRIPTION_DAYS,
+        })
+
+
 class InitiatePayment(APIView):
     """POST {plan, phone?} -> sends an M-Pesa prompt. Needs a logged-in account."""
     permission_classes = [IsAuthenticated]
@@ -81,6 +98,11 @@ class InitiatePayment(APIView):
 
         if plan not in PLANS:
             return Response({"error": "Unknown plan"}, status=400)
+        if PLANS[plan] <= 0:
+            return Response(
+                {"error": "The Freemium plan is free and already available. Choose a paid plan to subscribe."},
+                status=400,
+            )
         if not phone:
             return Response({"error": "Enter a valid Safaricom number, e.g. 0712345678"}, status=400)
         if not user.email:
@@ -173,12 +195,19 @@ class MpesaCallback(APIView):
                         pay.mpesa_receipt = str(items.get("MpesaReceiptNumber", ""))
                         pay.paid_at = timezone.now()
                         pay.save()
+                        # A successful plan payment also extends the account's subscription.
+                        if pay.user_id:
+                            extend_subscription(pay.user, pay.plan)
                         logger.info("Payment %s succeeded (%s)", pay.id, pay.mpesa_receipt)
                         send_receipt = pay
                     else:
                         pay.status = Payment.Status.FAILED
                         pay.save()
                         logger.info("Payment %s failed: %s", pay.id, pay.result_desc)
+                elif not pay:
+                    # The same callback also settles public donation prompts.
+                    from .donation_views import settle_mpesa_donation
+                    settle_mpesa_donation(checkout_id, cb)
 
             if send_receipt:
                 _send_receipt_email(send_receipt)

@@ -182,6 +182,10 @@ REST_FRAMEWORK = {
         'verify': '30/hour',
         'verify_resend': '5/hour',
         'change_password': '10/hour',
+        'donate': '20/hour',
+        'donate_status': '120/minute',
+        'contact': '10/hour',
+        'payment_initiate': '5/minute',
     },
 }
 # Only set this once you are sure how many proxies sit in front of Django.
@@ -216,8 +220,11 @@ PASSWORD_RESET_TIMEOUT = 3600
 # CORS / CSRF
 # ---------------------------------------------------------------------------
 _FRONTEND_ORIGINS = (
-    'https://yas-talk-50hg0pris-greenlightled.vercel.app,'
     'https://yas-talk.vercel.app,'
+    'https://yas-talk-app.vercel.app,'
+    'https://yastalk.com,'
+    'https://www.yastalk.com,'
+    'https://yas-talk-50hg0pris-greenlightled.vercel.app,'
     'http://localhost:5173,'
     'http://127.0.0.1:5173,'
     'http://localhost:5176,'
@@ -228,6 +235,7 @@ CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default=_FRONTEND_ORIGINS,
 
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r'^https://yas-talk-[a-z0-9]+-greenlightled\.vercel\.app$',
+    r'^https://yas-talk-app(-[a-z0-9]+)?\.vercel\.app$',
 ]
 
 # Allow all origins while developing (removes CORS headaches locally)
@@ -281,10 +289,47 @@ else:
 
 # Must be a sender you have verified in Brevo (Senders & IP), e.g.
 #   DEFAULT_FROM_EMAIL=YasTalk <you@yourdomain.com>
-DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER or 'noreply@yastalk.com')
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='YasTalk <Info@yastalk.com>')
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+# Every enquiry from the website is forwarded here (reply-to is the sender).
+CONTACT_EMAIL = config('CONTACT_EMAIL', default='Info@yastalk.com')
 
 # How long an email-verification link stays valid
 EMAIL_VERIFY_MAX_AGE = 3 * 24 * 3600   # 3 days
+
+
+# ---------------------------------------------------------------------------
+# Plans, subscriptions and payments
+# ---------------------------------------------------------------------------
+# Paying for a plan adds this many days to the account's subscription.
+SUBSCRIPTION_DAYS = config('SUBSCRIPTION_DAYS', default=30, cast=int)
+
+# M-Pesa (Daraja) — set these in the environment to switch STK Push on.
+# The callback URL must include the same secret as your /api/payments/mpesa/callback/<secret>/ route.
+MPESA_ENV = config('MPESA_ENV', default='sandbox')
+MPESA_CONSUMER_KEY = config('MPESA_CONSUMER_KEY', default='')
+MPESA_CONSUMER_SECRET = config('MPESA_CONSUMER_SECRET', default='')
+MPESA_SHORTCODE = config('MPESA_SHORTCODE', default='')
+MPESA_PASSKEY = config('MPESA_PASSKEY', default='')
+MPESA_CALLBACK_URL = config('MPESA_CALLBACK_URL', default='')
+MPESA_CALLBACK_SECRET = config('MPESA_CALLBACK_SECRET', default='')
+
+# Card donations through Paystack. Leave blank to show the page without the card tab.
+PAYSTACK_SECRET_KEY = config('PAYSTACK_SECRET_KEY', default='')
+
+# Donations: BEP-20 wallet, accepted tokens, and an optional Paybill.
+DONATION_BEP20_ADDRESS = config('DONATION_BEP20_ADDRESS', default='')
+DONATION_CRYPTO_TOKENS = config('DONATION_CRYPTO_TOKENS', default='USDT,USDC,BUSD')
+DONATION_PAYBILL = config('DONATION_PAYBILL', default='')
+DONATION_PAYBILL_ACCOUNT = config('DONATION_PAYBILL_ACCOUNT', default='')
+
+# Bank transfer for donations. The section stays hidden until an account number is set.
+DONATION_BANK_NAME = config('DONATION_BANK_NAME', default='')
+DONATION_BANK_ACCOUNT_NAME = config('DONATION_BANK_ACCOUNT_NAME', default='')
+DONATION_BANK_ACCOUNT_NUMBER = config('DONATION_BANK_ACCOUNT_NUMBER', default='')
+DONATION_BANK_BRANCH = config('DONATION_BANK_BRANCH', default='')
+DONATION_BANK_SWIFT = config('DONATION_BANK_SWIFT', default='')
 
 
 # ---------------------------------------------------------------------------
