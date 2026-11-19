@@ -318,6 +318,19 @@ MPESA_CALLBACK_SECRET = config('MPESA_CALLBACK_SECRET', default='')
 # Card donations through Paystack. Leave blank to show the page without the card tab.
 PAYSTACK_SECRET_KEY = config('PAYSTACK_SECRET_KEY', default='')
 
+# IntaSend — hosted checkout for plan payments (M-Pesa, card, bank transfer).
+# Money settles in your IntaSend wallet and is paid out to the bank account you
+# connect in the IntaSend dashboard. Set both keys to switch checkout on.
+INTAASEND_API_BASE = config('INTAASEND_API_BASE', default='https://api.intasend.com')
+INTAASEND_PUBLISHABLE_KEY = config('INTAASEND_PUBLISHABLE_KEY', default='')
+INTAASEND_SECRET_KEY = config('INTAASEND_SECRET_KEY', default='')
+# The string you type into IntaSend's dashboard webhook "challenge" field.
+INTAASEND_WEBHOOK_CHALLENGE = config('INTAASEND_WEBHOOK_CHALLENGE', default='')
+
+# Premium is shown as $4.99 and charged in Kenyan shillings.
+PREMIUM_PRICE_USD = config('PREMIUM_PRICE_USD', default='4.99')
+PREMIUM_PRICE_KES = config('PREMIUM_PRICE_KES', default=650, cast=int)
+
 # Donations: BEP-20 wallet, accepted tokens, and an optional Paybill.
 DONATION_BEP20_ADDRESS = config('DONATION_BEP20_ADDRESS', default='')
 DONATION_CRYPTO_TOKENS = config('DONATION_CRYPTO_TOKENS', default='USDT,USDC,BUSD')

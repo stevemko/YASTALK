@@ -37,6 +37,8 @@ from .donation_views import (
 )
 from .payment_views import (
     InitiatePayment,
+    IntaSendCheckout,
+    IntaSendWebhook,
     MpesaCallback,
     PaymentStatus,
     PaymentHistory,
@@ -97,6 +99,8 @@ urlpatterns = [
     # Payments
     path('payments/', PaymentHistory.as_view(), name='payment-history'),
     path('payments/plans/', PlansView.as_view(), name='payment-plans'),
+    path('payments/intasend/checkout/', IntaSendCheckout.as_view(), name='intasend-checkout'),
+    path('payments/intasend/webhook/', IntaSendWebhook.as_view(), name='intasend-webhook'),
     path('payments/initiate/', InitiatePayment.as_view(), name='payment-initiate'),
     path(
         'payments/mpesa/callback/<str:secret>/',

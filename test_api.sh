@@ -42,16 +42,16 @@ for i in 1 2 3 4 5; do status -X POST $BASE/auth/login/ -H "$J" -d "$BAD" > /dev
 check "6th attempt locked"         429 $(status -X POST $BASE/auth/login/ -H "$J" -d "$BAD")
 
 echo "--- payments"
-check "bad phone rejected"         400 $(status -X POST $BASE/payments/initiate/ -H "$J" -d '{"plan":"mini","phone":"12345","email":"b@example.com"}')
+check "bad phone rejected"         400 $(status -X POST $BASE/payments/initiate/ -H "$J" -d '{"plan":"premium","phone":"12345","email":"b@example.com"}')
 check "unknown plan rejected"      400 $(status -X POST $BASE/payments/initiate/ -H "$J" -d '{"plan":"nope","phone":"0712345678","email":"b@example.com"}')
 
 SECRET=$(grep '^MPESA_CALLBACK_SECRET=' .env | cut -d= -f2-)
 PAY_ID=$(python manage.py shell -c "
 from core.models import Payment
-p = Payment.objects.create(email='sim@example.com', phone='254712345678', plan='mini', amount=499, checkout_request_id='ws_CO_TEST_$TS')
+p = Payment.objects.create(email='sim@example.com', phone='254712345678', plan='premium', amount=650, checkout_request_id='ws_CO_TEST_$TS')
 print(p.id)
 " | tail -1)
-CB="{\"Body\":{\"stkCallback\":{\"MerchantRequestID\":\"x\",\"CheckoutRequestID\":\"ws_CO_TEST_$TS\",\"ResultCode\":0,\"ResultDesc\":\"ok\",\"CallbackMetadata\":{\"Item\":[{\"Name\":\"Amount\",\"Value\":499},{\"Name\":\"MpesaReceiptNumber\",\"Value\":\"TEST$TS\"},{\"Name\":\"PhoneNumber\",\"Value\":254712345678}]}}}}"
+CB="{\"Body\":{\"stkCallback\":{\"MerchantRequestID\":\"x\",\"CheckoutRequestID\":\"ws_CO_TEST_$TS\",\"ResultCode\":0,\"ResultDesc\":\"ok\",\"CallbackMetadata\":{\"Item\":[{\"Name\":\"Amount\",\"Value\":650},{\"Name\":\"MpesaReceiptNumber\",\"Value\":\"TEST$TS\"},{\"Name\":\"PhoneNumber\",\"Value\":254712345678}]}}}}"
 check "callback, wrong secret"     404 $(status -X POST $BASE/payments/mpesa/callback/not-the-secret/ -H "$J" -d '{}')
 check "callback, right secret"     200 $(status -X POST "$BASE/payments/mpesa/callback/$SECRET/" -H "$J" -d "$CB")
 check "payment marked success"     success "$(curl -s $BASE/payments/$PAY_ID/status/ | field status)"

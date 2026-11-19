@@ -102,7 +102,12 @@ class NewsletterSubscriber(models.Model):
 
 
 class Payment(models.Model):
-    """A payment made through the website (M-Pesa STK Push via Daraja)."""
+    """A plan payment. IntaSend's hosted checkout carries the money; the
+    classic M-Pesa STK route is kept for accounts that still use it."""
+
+    class Provider(models.TextChoices):
+        INTASEND = 'intasend', 'IntaSend'
+        MPESA = 'mpesa', 'M-Pesa (Daraja)'
 
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'
@@ -120,11 +125,21 @@ class Payment(models.Model):
         null=True, blank=True, related_name='payments',
     )
     email = models.EmailField()
-    phone = models.CharField(max_length=12, validators=[phone_validator])
+    phone = models.CharField(
+        max_length=12, blank=True, validators=[phone_validator],
+        help_text="Only set for M-Pesa STK payments; IntaSend collects the payer's own details.",
+    )
     plan = models.CharField(max_length=30)
     amount = models.PositiveIntegerField(help_text="Amount in KSh, always set by the server")
+    provider = models.CharField(
+        max_length=10, choices=Provider.choices, default=Provider.INTASEND, db_index=True,
+    )
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    invoice_id = models.CharField(
+        max_length=100, blank=True, db_index=True,
+        help_text="IntaSend invoice id, used to match webhooks and status checks",
     )
     checkout_request_id = models.CharField(max_length=100, blank=True, db_index=True)
     mpesa_receipt = models.CharField(max_length=30, blank=True)
